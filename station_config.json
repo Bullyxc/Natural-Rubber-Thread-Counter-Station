@@ -1,0 +1,47 @@
+{
+  "camera": {
+    "index": 1,
+    "width": 2560,
+    "height": 1440,
+    "fps": 30
+  },
+  "processing": {
+    "max_side": 1280,
+    "num_strips": 12,
+    "burst_frames": 5,
+    "burst_delay_ms": 40,
+    "polarity": "auto",
+    "count_axis": "y",
+    "pitch_override_px": null,
+    "pixels_per_mm": 0.0,
+    "edge_weight": 0.20,
+    "min_agreement": 0.50,
+    "roi": {
+      "x": 0.30,
+      "y": 0.0,
+      "width": 0.40,
+      "height": 1.0
+    }
+  },
+  "alignment": {
+    "mode": "auto",
+    "angle_deg": null,
+    "max_tilt_deg": 45.0
+  },
+  "color": {
+    "white_l_min": 150,
+    "black_l_max": 95
+  },
+  "ui": {
+    "fullscreen": true,
+    "window_title": "Thread Counter Station"
+  },
+  "capture": {
+    "directory": "image",
+    "save_roi": false,
+    "preview_width": 1600
+  },
+  "output": {
+    "directory": "results"
+  }
+}

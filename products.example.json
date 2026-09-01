@@ -1,0 +1,22 @@
+{
+  "products": [
+    {
+      "id": "BRIEF_WHITE_18_32MM",
+      "name": "BRIEF_WHITE_18_32MM",
+      "colors": ["white"],
+      "count_min": 18,
+      "count_max": 18,
+      "width_mm_min": 31.5,
+      "width_mm_max": 32.5
+    },
+    {
+      "id": "BRIEF_BLACK_18_32MM",
+      "name": "BRIEF_BLACK_18_32MM",
+      "colors": ["black"],
+      "count_min": 18,
+      "count_max": 18,
+      "width_mm_min": 31.5,
+      "width_mm_max": 32.5
+    }
+  ]
+}
