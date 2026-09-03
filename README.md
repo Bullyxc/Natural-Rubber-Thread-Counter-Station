@@ -1,6 +1,14 @@
 # เครื่องนับจำนวนเส้นด้ายยางธรรมชาติ
 ## Natural Thread Counter Station
 
+โปรแกรมนับจำนวนเส้นยางในแพแนวตั้งจากกล้อง USB โดยใช้ classical computer
+vision ด้วย OpenCV และ NumPy เท่านั้น ไม่ใช้ AI/ML model
+
+milestone ปัจจุบันใช้ Raspberry Pi 5 RAM 2 GB ที่ต่อกล้อง USB 
+และจอ HDMI 7 นิ้ว 1024×600 pixel
+โดยการรันจะใช้คำสั่ง `./run_pi5.sh`
+
+
 <table align="center">
   <tr>
     <td align="center" width="50%">
@@ -20,12 +28,6 @@
   </tr>
 </table>
 
-โปรแกรมนับจำนวนเส้นยางในแพแนวตั้งจากกล้อง USB โดยใช้ classical computer
-vision ด้วย OpenCV และ NumPy เท่านั้น ไม่ใช้ AI/ML model
-
-milestone ปัจจุบันใช้ Raspberry Pi 5 RAM 2 GB ที่ต่อกล้อง USB 
-และจอ HDMI 7 นิ้ว 1024×600 pixel
-โดยการรันจะใช้คำสั่ง `./run_pi5.sh`
 
 ## สเปกเครื่องที่ใช้งานจริง
 
