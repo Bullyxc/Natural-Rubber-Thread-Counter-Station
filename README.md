@@ -1,5 +1,5 @@
 # เครื่องนับจำนวนเส้นด้ายยางธรรมชาติ
-# Natural Rubber Thread Counter Station
+## Natural Rubber Thread Counter Station
 
 โปรแกรมต้นแบบสำหรับแท่นกล้อง USB ของโปรเจค Thread Counter Station ใช้
 Python 3.10–3.13, OpenCV และ NumPy เท่านั้น ไม่มีโมเดล AI/ML โปรแกรมจะทำงานกับ
