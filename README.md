@@ -6,6 +6,26 @@ Python 3.10–3.13, OpenCV และ NumPy เท่านั้น ไม่ม
 gradient ตามแกนภาพ และการโหวตผลจากหลายแถบภาพเพื่อประเมินจำนวนเส้นยางที่เห็น
 ซ้ำกันในแนวขวาง
 
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/IMG_2628.JPG" alt="Preview 1" width="100%">
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/IMG_2632.JPG" alt="Preview 2" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/IMG_2631.JPG" alt="Preview 3" width="100%">
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/IMG_2630.JPG" alt="Preview 4" width="100%">
+    </td>
+  </tr>
+</table>
+
+
 ## ติดตั้งและรัน
 
 ติดตั้ง Python 3.10 ก่อน แล้วเปิด PowerShell ในโฟลเดอร์นี้:
