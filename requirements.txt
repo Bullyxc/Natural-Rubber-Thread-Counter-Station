@@ -1,2 +1,8 @@
-numpy>=1.23,<3
-opencv-python>=4.8,<5
+# Desktop compatibility (the original Python 3.10 target).
+numpy>=1.23,<3; python_version < "3.13"
+opencv-python>=4.8,<5; python_version < "3.13"
+
+# Python 3.13 needs NumPy 2.1 or newer. These pins are for pip-based development
+# computers; Raspberry Pi deployment uses the system apt packages instead.
+numpy==2.2.6; python_version >= "3.13"
+opencv-python==4.12.0.88; python_version >= "3.13"

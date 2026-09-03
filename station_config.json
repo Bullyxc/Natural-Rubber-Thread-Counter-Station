@@ -26,7 +26,9 @@
   "alignment": {
     "mode": "auto",
     "angle_deg": null,
-    "max_tilt_deg": 45.0
+    "max_tilt_deg": 45.0,
+    "max_side": 1200,
+    "fallback_step_deg": 2.0
   },
   "color": {
     "white_l_min": 150,
@@ -43,5 +45,50 @@
   },
   "output": {
     "directory": "results"
+  },
+  "pi5_hdmi_station": {
+    "camera_index": 0,
+    "camera_width": 2560,
+    "camera_height": 1440,
+    "camera_fps": 15,
+    "screen_width": 1024,
+    "screen_height": 600,
+    "display_fps": 10,
+    "analysis_gap_ms": 120,
+    "anti_flicker_hz": 50,
+    "burst_frames": 5,
+    "stable_frames": 3,
+    "motion_width": 320,
+    "min_count": 30,
+    "max_count": 50,
+    "locator_max_side": 1024,
+    "fullscreen": true,
+    "window_title": "Thread Counter Station"
+  },
+  "runtime": {
+    "profile": "auto",
+    "desktop": {
+      "opencv_threads": 0,
+      "preview_fps": 30,
+      "alignment_max_side": 1200,
+      "alignment_fallback_step_deg": 2.0,
+      "sharpness_max_side": 720
+    },
+    "rpi5_passive": {
+      "opencv_threads": 1,
+      "preview_fps": 10,
+      "process_max_side": 960,
+      "alignment_max_side": 1200,
+      "alignment_fallback_step_deg": 2.0,
+      "num_strips": 10,
+      "burst_frames": 5,
+      "preview_width": 1280,
+      "sharpness_max_side": 560,
+      "temperature_warn_c": 65.0,
+      "temperature_hot_c": 70.0,
+      "temperature_critical_c": 75.0,
+      "memory_floor_mb": 512,
+      "monitor_interval_seconds": 1.0
+    }
   }
 }

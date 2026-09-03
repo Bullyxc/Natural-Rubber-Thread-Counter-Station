@@ -31,6 +31,12 @@ def _backend_candidates() -> list[tuple[int, str]]:
             (cv2.CAP_DSHOW, "DSHOW"),
             (cv2.CAP_ANY, "ANY"),
         ]
+    if sys.platform.startswith("linux"):
+        # V4L2 gives predictable UVC/MJPG behaviour and buffer controls on Pi OS.
+        return [
+            (cv2.CAP_V4L2, "V4L2"),
+            (cv2.CAP_ANY, "ANY"),
+        ]
     return [(cv2.CAP_ANY, "ANY")]
 
 
@@ -91,6 +97,7 @@ class LatestFrameReader:
     def __init__(self, capture: cv2.VideoCapture) -> None:
         self.capture = capture
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._frame: Any = None
@@ -119,10 +126,11 @@ class LatestFrameReader:
                 time.sleep(0.005)
                 continue
             now = time.perf_counter()
-            with self._lock:
+            with self._condition:
                 self._frame = frame
                 self._sequence += 1
                 self._timestamp = now
+                self._condition.notify_all()
             count += 1
             elapsed = now - window_start
             if elapsed >= 1.0:
@@ -130,13 +138,27 @@ class LatestFrameReader:
                 count = 0
                 window_start = now
 
-    def latest(self) -> Optional[tuple[Any, int, float]]:
+    def latest(self, copy: bool = True) -> Optional[tuple[Any, int, float]]:
         with self._lock:
             if self._frame is None:
                 return None
-            # The reader thread may replace its buffer immediately after the
-            # lock is released, so the UI gets an independent raw-frame copy.
-            return self._frame.copy(), self._sequence, self._timestamp
+            frame = self._frame.copy() if copy else self._frame
+            return frame, self._sequence, self._timestamp
+
+    def wait_latest(
+        self,
+        after_sequence: int = -1,
+        timeout: float = 0.05,
+        copy: bool = False,
+    ) -> Optional[tuple[Any, int, float]]:
+        """Wait efficiently for a newer frame instead of busy-polling the CPU."""
+        with self._condition:
+            if self._frame is None or self._sequence <= after_sequence:
+                self._condition.wait(timeout=max(0.0, timeout))
+            if self._frame is None:
+                return None
+            frame = self._frame.copy() if copy else self._frame
+            return frame, self._sequence, self._timestamp
 
     def stop(self) -> None:
         self._stop.set()

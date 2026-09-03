@@ -22,9 +22,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from runtime_control import bootstrap_environment
+
+bootstrap_environment()
 
 import cv2
 
@@ -34,6 +39,7 @@ from camera_stream import (
     open_camera_backend,
     resize_for_preview,
 )
+from runtime_control import SystemMonitor, build_runtime_profile, configure_opencv
 
 
 WINDOW_TITLE = "Thread Counter - Camera Capture Test"
@@ -120,15 +126,11 @@ def draw_status(
         for line in lines
     ) + 32
     panel_height = 30 * len(lines) + 18
-    overlay = view.copy()
-    cv2.rectangle(
-        overlay,
-        (14, 14),
-        (14 + panel_width, 14 + panel_height),
-        (0, 0, 0),
-        -1,
-    )
-    cv2.addWeighted(overlay, 0.72, view, 0.28, 0, view)
+    panel_x1 = min(width, 14 + panel_width)
+    panel_y1 = min(height, 14 + panel_height)
+    panel = view[14:panel_y1, 14:panel_x1]
+    if panel.size:
+        panel[:] = (panel.astype("float32") * 0.28).astype("uint8")
     for index, line in enumerate(lines):
         cv2.putText(
             view,
@@ -194,6 +196,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="station JSON configuration",
     )
     parser.add_argument("--camera", type=int, default=None, help="camera index override")
+    parser.add_argument(
+        "--runtime-profile",
+        choices=("auto", "desktop", "rpi5-passive"),
+        default=None,
+        help="runtime tuning; auto detects Raspberry Pi 5",
+    )
     parser.add_argument("--width", type=int, default=None, help="requested camera width")
     parser.add_argument("--height", type=int, default=None, help="requested camera height")
     parser.add_argument("--fps", type=int, default=None, help="requested camera FPS")
@@ -249,6 +257,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     preview_width = int(
         args.preview_width or capture_config.get("preview_width", 1600)
     )
+    runtime = build_runtime_profile(config, args.runtime_profile)
+    configure_opencv(runtime)
+    if runtime.max_preview_width is not None:
+        preview_width = min(preview_width, runtime.max_preview_width)
+    print(
+        f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}; "
+        f"runtime profile: {runtime.name}; OpenCV threads={cv2.getNumThreads()}, "
+        f"preview limit={runtime.preview_fps:.0f} FPS"
+    )
 
     if args.list_cameras:
         list_cameras()
@@ -264,7 +281,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not capture.isOpened():
         print(
             f"Cannot open camera {camera_index}. Check the USB connection, "
-            "Windows camera permission, and camera index."
+            "camera permission, and camera or /dev/video* index."
         )
         return 2
 
@@ -291,40 +308,57 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
 
     reader = LatestFrameReader(capture).start()
+    monitor = SystemMonitor(runtime)
     display_meter = FpsMeter()
     status = "READY"
     display_fps = 0.0
     last_sequence = -1
+    next_preview_at = 0.0
     try:
         while True:
-            packet = reader.latest()
+            packet = reader.wait_latest(
+                after_sequence=last_sequence,
+                timeout=0.02,
+                copy=False,
+            )
             if packet is None:
                 cv2.waitKey(1)
                 continue
-            frame, sequence, _ = packet
+            frame, sequence, timestamp = packet
             if frame is None:
                 status = "FRAME READ FAILED"
                 print(status)
                 break
 
-            if sequence != last_sequence:
-                display_fps = display_meter.tick()
+            now = time.monotonic()
+            system_status = monitor.sample()
+            preview_fps = monitor.preview_fps(system_status)
+            is_new_frame = sequence != last_sequence
+            if is_new_frame:
                 last_sequence = sequence
-            live_status = (
-                f"{status} | CAP {reader.read_fps:.1f} FPS | "
-                f"DISPLAY {display_fps:.1f} FPS"
-            )
+            if is_new_frame and now >= next_preview_at:
+                display_fps = display_meter.tick()
+                live_status = (
+                    f"{status} | CAP {reader.read_fps:.1f} FPS | "
+                    f"DISPLAY {display_fps:.1f} FPS"
+                )
+                runtime_text = system_status.summary()
+                if runtime_text:
+                    live_status += f" | {runtime_text}"
+                if now - timestamp > 2.0:
+                    live_status += " | STALE FRAME"
 
-            view = draw_status(
-                frame,
-                camera_index,
-                actual_width,
-                actual_height,
-                save_dir,
-                live_status,
-            )
-            view = resize_for_preview(view, preview_width)
-            cv2.imshow(WINDOW_TITLE, view)
+                preview = resize_for_preview(frame, preview_width)
+                view = draw_status(
+                    preview,
+                    camera_index,
+                    actual_width,
+                    actual_height,
+                    save_dir,
+                    live_status,
+                )
+                cv2.imshow(WINDOW_TITLE, view)
+                next_preview_at = now + 1.0 / max(1.0, preview_fps)
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), ord("Q"), 27):

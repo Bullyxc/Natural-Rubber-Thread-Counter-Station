@@ -33,10 +33,25 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from runtime_control import bootstrap_environment
+
+bootstrap_environment()
+
 import cv2
 import numpy as np
 
-from camera_stream import open_camera_backend, resize_for_preview
+from camera_stream import (
+    CameraInfo,
+    LatestFrameReader,
+    open_camera_backend,
+    resize_for_preview,
+)
+from runtime_control import (
+    RuntimeProfile,
+    SystemMonitor,
+    build_runtime_profile,
+    configure_opencv,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +80,8 @@ class StationSettings:
     alignment_mode: str = "auto"
     alignment_angle_deg: Optional[float] = None
     max_tilt_deg: float = 45.0
+    alignment_max_side: int = 1200
+    alignment_fallback_step_deg: float = 2.0
     pitch_override_px: Optional[float] = None
     pixels_per_mm: float = 0.0
     edge_weight: float = 0.20
@@ -121,6 +138,14 @@ class StationSettings:
             max_tilt_deg=float(
                 alignment.get("max_tilt_deg", cls.max_tilt_deg)
             ),
+            alignment_max_side=int(
+                alignment.get("max_side", cls.alignment_max_side)
+            ),
+            alignment_fallback_step_deg=float(
+                alignment.get(
+                    "fallback_step_deg", cls.alignment_fallback_step_deg
+                )
+            ),
             pitch_override_px=_optional_float(
                 processing.get("pitch_override_px", cls.pitch_override_px)
             ),
@@ -170,6 +195,10 @@ class StationSettings:
         if self.alignment_mode not in {"auto", "none", "manual"}:
             self.alignment_mode = "auto"
         self.max_tilt_deg = float(np.clip(self.max_tilt_deg, 0.0, 80.0))
+        self.alignment_max_side = max(320, int(self.alignment_max_side))
+        self.alignment_fallback_step_deg = float(
+            np.clip(self.alignment_fallback_step_deg, 1.0, 10.0)
+        )
         if self.pixels_per_mm < 0:
             self.pixels_per_mm = 0.0
         return self
@@ -897,6 +926,8 @@ def estimate_alignment_rotation(
     image_bgr: np.ndarray,
     count_axis: str,
     max_tilt_deg: float = 45.0,
+    max_side: int = 1200,
+    fallback_step_deg: float = 2.0,
 ) -> float:
     """Estimate the rotation needed to make repeated thread lines axis-aligned."""
     if image_bgr is None or image_bgr.size == 0 or max_tilt_deg <= 0:
@@ -909,7 +940,7 @@ def estimate_alignment_rotation(
 
     # Hough is run on a reduced copy to keep auto-alignment inexpensive.
     height, width = gray.shape[:2]
-    scale = min(1.0, 1200.0 / max(height, width))
+    scale = min(1.0, float(max_side) / max(height, width))
     if scale < 1.0:
         small = cv2.resize(
             gray,
@@ -952,7 +983,7 @@ def estimate_alignment_rotation(
     )
     if lines is None:
         periodic_angle, periodic_score = _search_periodic_alignment(
-            small, count_axis, max_tilt_deg
+            small, count_axis, max_tilt_deg, fallback_step_deg
         )
         return periodic_angle if periodic_score >= 0.50 else 0.0
 
@@ -980,7 +1011,7 @@ def estimate_alignment_rotation(
 
     if not corrections:
         periodic_angle, periodic_score = _search_periodic_alignment(
-            small, count_axis, max_tilt_deg
+            small, count_axis, max_tilt_deg, fallback_step_deg
         )
         return periodic_angle if periodic_score >= 0.50 else 0.0
 
@@ -1009,7 +1040,7 @@ def estimate_alignment_rotation(
         return estimated
     hough_score = _alignment_periodicity_score(small, estimated, count_axis)
     periodic_angle, periodic_score = _search_periodic_alignment(
-        small, count_axis, max_tilt_deg
+        small, count_axis, max_tilt_deg, fallback_step_deg
     )
     if periodic_score >= max(0.50, hough_score + 0.10):
         return periodic_angle
@@ -1095,6 +1126,7 @@ def _search_periodic_alignment(
     gray: np.ndarray,
     count_axis: str,
     max_tilt_deg: float,
+    coarse_step_deg: float = 2.0,
 ) -> tuple[float, float]:
     """Search only when Hough's line orientation is not self-consistent."""
     if max_tilt_deg <= 0:
@@ -1102,7 +1134,7 @@ def _search_periodic_alignment(
     coarse_angles = np.arange(
         -max_tilt_deg,
         max_tilt_deg + 0.01,
-        2.0,
+        max(1.0, float(coarse_step_deg)),
         dtype=np.float32,
     )
     coarse_angles = np.unique(np.concatenate((coarse_angles, [0.0])))
@@ -1118,7 +1150,7 @@ def _search_periodic_alignment(
     refine_angles = np.arange(
         max(-max_tilt_deg, best_angle - 2.0),
         min(max_tilt_deg, best_angle + 2.0) + 0.01,
-        0.5,
+        max(0.5, float(coarse_step_deg) / 4.0),
         dtype=np.float32,
     )
     refined = [
@@ -1212,6 +1244,8 @@ def analyse_roi(
             roi_bgr,
             settings.count_axis,
             settings.max_tilt_deg,
+            settings.alignment_max_side,
+            settings.alignment_fallback_step_deg,
         )
     aligned_roi = rotate_for_alignment(roi_bgr, rotation_deg)
     gray, scale = prepare_gray(aligned_roi, settings.process_max_side)
@@ -1266,15 +1300,15 @@ def _draw_panel(
         for line in lines
     ) + 32
     height = line_height * len(lines) + 18
-    overlay = image.copy()
-    cv2.rectangle(
-        overlay,
-        (x - 10, y - 10),
-        (x + width, y + height),
-        (0, 0, 0),
-        -1,
-    )
-    cv2.addWeighted(overlay, 0.72, image, 0.28, 0, image)
+    image_height, image_width = image.shape[:2]
+    panel_x0 = max(0, x - 10)
+    panel_y0 = max(0, y - 10)
+    panel_x1 = min(image_width, x + width)
+    panel_y1 = min(image_height, y + height)
+    panel = image[panel_y0:panel_y1, panel_x0:panel_x1]
+    if panel.size:
+        black = np.zeros_like(panel)
+        cv2.addWeighted(black, 0.72, panel, 0.28, 0, panel)
     colour = (235, 235, 235)
     for index, line in enumerate(lines):
         cv2.putText(
@@ -1378,6 +1412,7 @@ def draw_station_view(
     sharpness: Optional[float],
     settings: StationSettings,
     status_message: str = "PRESS SPACE",
+    coordinate_scale: float = 1.0,
 ) -> np.ndarray:
     """Draw ROI, consensus lines and a full-screen-friendly dashboard."""
     view = frame_bgr.copy()
@@ -1388,8 +1423,8 @@ def draw_station_view(
     cv2.rectangle(view, (x0, y0), (x1, y1), quality_colour, 2)
     if result is not None:
         scale = max(1e-6, result.scale_factor)
-        start = int(round(result.x_left / scale))
-        end = int(round(result.x_right / scale))
+        start = int(round((result.x_left / scale) * coordinate_scale))
+        end = int(round((result.x_right / scale) * coordinate_scale))
         if result.count_axis == "y":
             _draw_aligned_profile_line(
                 view, roi_rect, result, start, quality_colour, 2
@@ -1410,7 +1445,7 @@ def draw_station_view(
                 view,
                 roi_rect,
                 result,
-                float(position) / scale,
+                (float(position) / scale) * coordinate_scale,
                 quality_colour,
                 1,
             )
@@ -1443,6 +1478,13 @@ def draw_station_view(
     return view
 
 
+def _scale_rect(
+    rect: tuple[int, int, int, int],
+    scale: float,
+) -> tuple[int, int, int, int]:
+    return tuple(int(round(value * scale)) for value in rect)  # type: ignore[return-value]
+
+
 def create_window(settings: StationSettings) -> None:
     cv2.namedWindow(settings.window_title, cv2.WINDOW_NORMAL)
     if settings.fullscreen:
@@ -1458,43 +1500,51 @@ def create_window(settings: StationSettings) -> None:
 # ---------------------------------------------------------------------------
 
 
-def open_camera(settings: StationSettings) -> cv2.VideoCapture:
+def open_camera(settings: StationSettings) -> tuple[cv2.VideoCapture, CameraInfo]:
     # MJPG keeps a 2K-capable UVC camera usable over USB 2.0 when supported;
     # the shared helper prefers Media Foundation on Windows.
-    capture, _ = open_camera_backend(
+    return open_camera_backend(
         settings.camera_index,
         settings.camera_width,
         settings.camera_height,
         settings.camera_fps,
         use_mjpg=True,
     )
-    return capture
 
 
 def capture_best_frame(
-    capture: cv2.VideoCapture,
+    reader: LatestFrameReader,
     settings: StationSettings,
+    runtime: RuntimeProfile,
 ) -> tuple[Optional[np.ndarray], Optional[float]]:
-    frames: list[np.ndarray] = []
-    for _ in range(settings.burst_frames):
-        ok, frame = capture.read()
-        if ok and frame is not None:
-            frames.append(frame)
-        if settings.burst_delay_ms:
-            time.sleep(settings.burst_delay_ms / 1000.0)
-    if not frames:
-        return None, None
-
-    best_frame = frames[0]
+    """Keep only the sharpest full frame so a 2GB Pi never stores a full burst."""
+    best_frame: Optional[np.ndarray] = None
     best_score = -math.inf
-    for frame in frames:
+    collected = 0
+    last_sequence = -1
+    deadline = time.monotonic() + max(2.0, settings.burst_frames * 0.75)
+    while collected < settings.burst_frames and time.monotonic() < deadline:
+        packet = reader.wait_latest(
+            after_sequence=last_sequence,
+            timeout=0.5,
+            copy=False,
+        )
+        if packet is None:
+            continue
+        frame, sequence, _ = packet
+        if sequence == last_sequence or frame is None:
+            continue
+        last_sequence = sequence
+        collected += 1
         roi, _ = crop_roi(frame, settings)
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray, _ = prepare_gray(roi, runtime.sharpness_max_side)
         score = sharpness_score(gray)
         if score > best_score:
             best_frame = frame
             best_score = score
-    return best_frame, best_score
+        if settings.burst_delay_ms and collected < settings.burst_frames:
+            time.sleep(settings.burst_delay_ms / 1000.0)
+    return best_frame, best_score if best_frame is not None else None
 
 
 def result_as_json(result: CountResult) -> dict[str, Any]:
@@ -1556,9 +1606,15 @@ def run_image(
     image_path: Path,
     settings: StationSettings,
     catalog: ProductCatalog,
+    runtime: RuntimeProfile,
     save: bool,
     no_display: bool,
 ) -> int:
+    monitor = SystemMonitor(runtime)
+    system_status = monitor.sample(force=True)
+    if not system_status.processing_allowed:
+        print(f"Processing paused: {system_status.reason}")
+        return 3
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         print(f"Could not load image: {image_path}")
@@ -1578,18 +1634,18 @@ def run_image(
         return 0 if result is not None else 1
 
     create_window(settings)
+    preview = resize_for_preview(image, settings.preview_width)
+    coordinate_scale = preview.shape[1] / float(image.shape[1])
     view = draw_station_view(
-        image,
-        rect,
+        preview,
+        _scale_rect(rect, coordinate_scale),
         result,
-        sharpness_score(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)),
+        sharpness_score(prepare_gray(roi, runtime.sharpness_max_side)[0]),
         settings,
         status_message="IMAGE RESULT" if result is not None else "NO RESULT",
+        coordinate_scale=coordinate_scale,
     )
-    cv2.imshow(
-        settings.window_title,
-        resize_for_preview(view, settings.preview_width),
-    )
+    cv2.imshow(settings.window_title, view)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
     return 0 if result is not None else 1
@@ -1598,19 +1654,23 @@ def run_image(
 def run_live(
     settings: StationSettings,
     catalog: ProductCatalog,
+    runtime: RuntimeProfile,
     no_display: bool,
 ) -> int:
-    capture = open_camera(settings)
+    capture, camera_info = open_camera(settings)
     if not capture.isOpened():
         print(
             f"Cannot open camera index {settings.camera_index}. "
-            "Check Windows camera permission and the USB connection."
+            "Check camera permission, the USB connection and /dev/video* index."
         )
         return 2
 
-    actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"Camera opened at {actual_width}x{actual_height}")
+    actual_width = camera_info.actual_width
+    actual_height = camera_info.actual_height
+    print(
+        f"Camera opened at {actual_width}x{actual_height} "
+        f"via {camera_info.backend}, driver FPS {camera_info.driver_fps:.1f}"
+    )
     print("SPACE=capture  R=reset  S=save  Q/ESC=quit")
 
     if no_display:
@@ -1624,33 +1684,58 @@ def run_live(
     last_frame: Optional[np.ndarray] = None
     sharpness: Optional[float] = None
     status_message = "PRESS SPACE"
-    tick = 0
+    reader = LatestFrameReader(capture).start()
+    monitor = SystemMonitor(runtime)
+    last_sequence = -1
+    next_preview_at = 0.0
+    next_sharpness_at = 0.0
 
     try:
         while True:
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                status_message = "FRAME READ FAILED"
-                break
+            packet = reader.wait_latest(
+                after_sequence=last_sequence,
+                timeout=0.02,
+                copy=False,
+            )
+            now = time.monotonic()
+            system_status = monitor.sample()
+            frame: Optional[np.ndarray] = None
+            if packet is not None:
+                candidate, sequence, timestamp = packet
+                if now - timestamp > 2.0:
+                    status_message = "CAMERA FRAME STALE"
+                elif sequence != last_sequence:
+                    frame = candidate
+                    last_sequence = sequence
 
-            tick += 1
-            if tick % 8 == 0:
-                roi, _ = crop_roi(frame, settings)
-                sharpness = sharpness_score(
-                    cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            preview_fps = monitor.preview_fps(system_status)
+            if frame is not None and now >= next_preview_at:
+                roi, raw_rect = crop_roi(frame, settings)
+                if now >= next_sharpness_at:
+                    sharp_gray, _ = prepare_gray(
+                        roi, runtime.sharpness_max_side
+                    )
+                    sharpness = sharpness_score(sharp_gray)
+                    next_sharpness_at = now + 1.0
+
+                preview = resize_for_preview(frame, settings.preview_width)
+                coordinate_scale = preview.shape[1] / float(frame.shape[1])
+                runtime_text = system_status.summary()
+                display_status = status_message
+                if runtime_text:
+                    display_status = f"{display_status} | {runtime_text}"
+                view = draw_station_view(
+                    preview,
+                    _scale_rect(raw_rect, coordinate_scale),
+                    last_result,
+                    sharpness,
+                    settings,
+                    status_message=display_status,
+                    coordinate_scale=coordinate_scale,
                 )
-            view = draw_station_view(
-                frame,
-                crop_roi(frame, settings)[1],
-                last_result,
-                sharpness,
-                settings,
-                status_message=status_message,
-            )
-            cv2.imshow(
-                settings.window_title,
-                resize_for_preview(view, settings.preview_width),
-            )
+                cv2.imshow(settings.window_title, view)
+                next_preview_at = now + 1.0 / max(1.0, preview_fps)
+
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), ord("Q"), 27):
@@ -1674,9 +1759,18 @@ def run_live(
             if key != ord(" "):
                 continue
 
+            system_status = monitor.sample(force=True)
+            if not system_status.processing_allowed:
+                status_message = f"{system_status.reason} - WAIT TO COOL"
+                print(status_message)
+                continue
+            if runtime.is_pi_profile:
+                cv2.setNumThreads(monitor.processing_threads(system_status))
             print(f"Capturing {settings.burst_frames} frames...", flush=True)
             started = time.perf_counter()
-            best_frame, best_sharpness = capture_best_frame(capture, settings)
+            best_frame, best_sharpness = capture_best_frame(
+                reader, settings, runtime
+            )
             if best_frame is None:
                 status_message = "CAPTURE FAILED"
                 continue
@@ -1690,7 +1784,7 @@ def run_live(
             print(f"Capture + processing: {elapsed_ms:.0f} ms")
             status_message = "RESULT READY" if last_result is not None else "NO RELIABLE RESULT"
     finally:
-        capture.release()
+        reader.stop()
         cv2.destroyAllWindows()
     return 0
 
@@ -1718,6 +1812,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--camera", type=int, default=None, help="camera index override")
     parser.add_argument("--image", type=Path, help="run once on an image instead of the camera")
+    parser.add_argument(
+        "--runtime-profile",
+        choices=("auto", "desktop", "rpi5-passive"),
+        default=None,
+        help="runtime tuning; auto detects Raspberry Pi 5",
+    )
     parser.add_argument(
         "--process-width",
         type=int,
@@ -1754,7 +1854,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    settings = load_settings(args.config)
+    try:
+        settings = load_settings(args.config)
+        if args.config.exists():
+            with args.config.open("r", encoding="utf-8") as handle:
+                config_data = json.load(handle)
+        else:
+            config_data = {}
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"Could not load station config: {error}")
+        return 2
     if args.camera is not None:
         settings.camera_index = args.camera
     if args.process_width is not None:
@@ -1769,6 +1878,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         settings.fullscreen = False
     settings.validated()
 
+    runtime = build_runtime_profile(config_data, args.runtime_profile)
+    runtime.apply_to_settings(settings)
+    settings.validated()
+    configure_opencv(runtime)
+    memory_text = (
+        f", RAM {runtime.total_memory_mb:.0f}MB"
+        if runtime.total_memory_mb is not None
+        else ""
+    )
+    print(
+        f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}; "
+        f"runtime profile: {runtime.name} ({runtime.board_model}{memory_text}); "
+        f"OpenCV threads={cv2.getNumThreads()}, process={settings.process_max_side}px, "
+        f"preview={settings.preview_width}px/{runtime.preview_fps:.0f} FPS"
+    )
+
     try:
         catalog = ProductCatalog.from_file(args.products)
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -1780,10 +1905,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             args.image,
             settings,
             catalog,
+            runtime,
             save=args.save,
             no_display=args.no_display,
         )
-    return run_live(settings, catalog, no_display=args.no_display)
+    if runtime.is_pi_profile:
+        print(
+            "ERROR: Legacy live mode is disabled on Raspberry Pi 5 for safety. "
+            "Run ./run_pi5.sh or pi5_usb_hdmi_station.py instead."
+        )
+        return 2
+    return run_live(settings, catalog, runtime, no_display=args.no_display)
 
 
 if __name__ == "__main__":

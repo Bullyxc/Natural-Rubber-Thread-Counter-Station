@@ -1,22 +1,16 @@
 {
   "products": [
     {
-      "id": "BRIEF_WHITE_18_32MM",
-      "name": "BRIEF_WHITE_18_32MM",
-      "colors": ["white"],
-      "count_min": 18,
-      "count_max": 18,
-      "width_mm_min": 31.5,
-      "width_mm_max": 32.5
-    },
-    {
-      "id": "BRIEF_BLACK_18_32MM",
-      "name": "BRIEF_BLACK_18_32MM",
-      "colors": ["black"],
-      "count_min": 18,
-      "count_max": 18,
-      "width_mm_min": 31.5,
-      "width_mm_max": 32.5
+      "id": "EXAMPLE_PRODUCT_40",
+      "name": "EXAMPLE PRODUCT 40",
+      "nominal_count": 40,
+      "pitch_mm_min": 0.95,
+      "pitch_mm_max": 1.05,
+      "pitch_px_min": 24.0,
+      "pitch_px_max": 27.0,
+      "colors": [],
+      "count_min": 40,
+      "count_max": 40
     }
   ]
 }

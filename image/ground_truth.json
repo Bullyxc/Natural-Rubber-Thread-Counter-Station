@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "phase_one_count_range": {
+    "minimum": 30,
+    "maximum": 50,
+    "status": "temporary_test_constraint"
+  },
+  "samples": [
+    {
+      "file": "dual_background_sample_01.jpg",
+      "visible_strand_count": 40,
+      "nominal_strand_count": 40,
+      "expected_qc": "PASS",
+      "layout": "vertical_dual_background",
+      "sample_condition": "qc_pass"
+    },
+    {
+      "file": "dual_background_sample_02.jpg",
+      "visible_strand_count": 37,
+      "nominal_strand_count": 40,
+      "expected_qc": "FAIL",
+      "layout": "vertical_dual_background",
+      "sample_condition": "qc_fail_possible_torn_outer_edge"
+    },
+    {
+      "file": "dual_background_sample_03.jpg",
+      "visible_strand_count": 40,
+      "nominal_strand_count": 40,
+      "expected_qc": "PASS",
+      "layout": "vertical_dual_background",
+      "sample_condition": "qc_pass"
+    }
+  ]
+}
